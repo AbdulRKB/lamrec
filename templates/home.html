@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAMREC</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.3/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.js"></script>
+    <script src="https://code.jquery.com/ui/1.13.3/jquery-ui.js"></script>
+    <script>
+        $(function() {
+            $("#datepicker").datepicker();
+        });
+    </script>
+    <style>
+        .ui-datepicker {
+            font-size: 0.9em;
+        }
+        .ui-datepicker select.ui-datepicker-month, 
+        .ui-datepicker select.ui-datepicker-year {
+            width: 45%;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="text-xl font-bold text-gray-800">LAMREC</div>
+            <div>
+                <a href="/logout" class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition duration-150 ease-in-out">
+                    Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+    <div class="container mx-auto p-6">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Welcome, {{current_user.username|title}}</h1>
+        </header>
+
+        <!-- with flash alerts, both colour and text -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="bg-{{category}}-500 text-white px-4 py-2 rounded shadow-lg mb-4">
+                    {{message}}
+                </div>
+            {% endfor %}
+        {% endwith %}
+
+        <main class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <section class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">Add Transaction</h2>
+                <form action="/" method="post" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div>
+                        <label for="datepicker" class="block text-sm font-medium text-gray-700">Date</label>
+                        <!-- max date is todays date -->
+                        <input type="text" name="date" id="datepicker" placeholder="mm/dd/yyyy" required
+                               class="outline-gray-200 p-2 mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    </div>
+                    <div>
+                        <label for="amount" class="block text-sm font-medium text-gray-700">Amount</label>
+                        <input type="text" name="amount" id="amount" required min="1"
+                               class="outline-gray-200 p-2 mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    </div>
+                    <div>
+                        <label for="description" class="block text-sm font-medium text-gray-700">Description</label>
+                        <input type="text" name="description" id="description" required
+                               class="outline-gray-200 p-2 mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+                    </div>
+                    <div class="flex space-x-4">
+                        <div class="flex items-center">
+                            <input type="radio" name="type" value="income" id="income" required
+                                   class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300">
+                            <label for="income" class="ml-2 block text-sm text-gray-700">Income</label>
+                        </div>
+                        <div class="flex items-center">
+                            <input type="radio" name="type" value="expense" id="expense" required
+                                   class="focus:ring-indigo-500 h-4 w-4 text-indigo-600 border-gray-300">
+                            <label for="expense" class="ml-2 block text-sm text-gray-700">Expense</label>
+                        </div>
+                    </div>
+                    <button type="submit"
+                            class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50 transition duration-150 ease-in-out">
+                        Add Transaction
+                    </button>
+                </form>
+            </section>
+
+            <!-- if the overall number of transactions is not zero -->
+            
+            <section class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">Transactions (Last 7 Days) <a href="/transactions" class="text-indigo-600 hover:underline text-xs">View All</a></h2>
+                
+
+
+                <div class="overflow-x-auto">
+                    {% if transactions|length > 0 %}
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                        {% for transaction in transactions %}
+
+                            <tr title="{{ transaction.description|capitalize }}">
+                                {% if transaction.category == "income" %}
+                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Income</span></td>
+                                {% else %}
+                                <td class="px-6 py-4 whitespace-nowrap"><span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Expense</span></td>
+                                {% endif %}
+                                <td class="px-6 py-4 whitespace-nowrap">{{ transaction.date.strftime('%m/%d/%Y') }}</td>
+                                <td class="px-6 py-4 whitespace-nowrap">{{ transaction.amount }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                    {% endif %}
+                </div>
+                <!-- display totals and current balance, style as 3 cards -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                    <div class="bg-green-100 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-green-800">Income</h3>
+                        <p class="text-2xl font-bold text-green-800">${{ total_income }}</p>
+                    </div>
+                    <div class="bg-red-100 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-red-800">Expenses</h3>
+                        <p class="text-2xl font-bold text-red-800">${{ total_expense }}</p>
+                    </div>
+                    <div class="bg-gray-100 rounded-lg p-4">
+                        <h3 class="text-lg font-semibold text-gray-800">Balance</h3>
+                        <p class="text-2xl font-bold text-gray-800">${{ current_balance }}</p>
+                    </div>
+                </div>
+                 
+                 
+            </section>
+        </main>
+    </div>
+</body>
+</html>

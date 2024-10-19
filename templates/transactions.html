@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAMREC</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.13.3/themes/base/jquery-ui.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.js"></script>
+    <script src="https://code.jquery.com/ui/1.13.3/jquery-ui.js"></script>
+    <link rel="stylesheet" href="https://cdn.datatables.net/2.1.7/css/dataTables.dataTables.css" />
+    <script src="https://cdn.datatables.net/2.1.7/js/dataTables.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="text-xl font-bold text-gray-800">LAMREC</div>
+            <div>
+                <a href="/logout" class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition duration-150 ease-in-out">
+                    Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+    <div class="container mx-auto p-6">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Welcome, {{current_user.username|title}}</h1>
+        </header>
+        <!-- navigation to go to home page, just a link, not fancy button-->
+        <a href="/" class="text-blue-500 hover:underline">Go to Home</a>
+
+        <!-- with flash alerts, both colour and text -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="bg-{{category}}-500 text-white px-4 py-2 rounded shadow-lg mb-4">
+                    {{message}}
+                </div>
+            {% endfor %}
+        {% endwith %}
+
+        <!-- add total income and stuff as cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mt-4">
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">Total Income</h2>
+                <p class="text-3xl font-semibold text-green-500">${{ "%.2f" | format(total_income) }}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">Total Expenses</h2>
+                <p class="text-3xl font-semibold text-red-500">${{ "%.2f" | format(total_expense) }}</p>
+            </div>
+            <div class="bg-white rounded-lg shadow p-6">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">Total Balance</h2>
+                <p class="text-3xl font-semibold text-blue-500">${{ "%.2f" | format(current_balance) }}</p>
+            </div>
+        </div>
+
+
+
+        <!-- show all transactions in beautiful table just like previous page, in tailwindas -->
+        <table class="table-auto w-full" id="table">
+            <thead>
+                <tr>
+                    <!-- <th class="px-4 py-2">ID</th> -->
+                    <th class="px-4 py-2">Amount</th>
+                    <th class="px-4 py-2">Date</th>
+                    <th class="px-4 py-2">Description</th>
+                </tr>
+            </thead>
+            <tbody style="text-align: center;">
+                {% for transaction in transactions %}
+                    <tr>
+                        <!-- <td class="border px-4 py-2">{{transaction.id}}</td> -->
+                        <td class="border px-4 py-2">
+                            {% if transaction.category == "income" %}
+                            <!-- add green up arrow -->
+                            <span class="text-green-600">↑</span>
+                            {% else %}
+                            <!-- add red down arrow -->
+                            <span class="text-red-600">↓</span>
+                            {% endif %}
+                            
+                            {{ "%.2f" | format(transaction.amount)}}</td>
+                        <!-- date should be yyyy-mm-dd only in that format -->
+                        <td class="border py-2">{{transaction.date.strftime('%m/%d/%Y')}}</td>
+                        <td style="text-align: justify;display: flex;justify-content: space-between;" class="border px-4 py-2">{{transaction.description}} <span>
+                            <a href="/edit/{{transaction.id}}" class="text-blue-500 hover:underline">✏️</a>
+                            <a href="/delete/{{transaction.id}}" class="text-red-500 hover:underline">🗑️</a>
+                        </span></td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <script>
+            let table = new DataTable('#table');
+        </script>
+</body>
+</html>
