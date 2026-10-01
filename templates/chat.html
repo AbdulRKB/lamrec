@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LAMREC - Chat</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+    <style>
+        @keyframes msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        .msg-in { animation: msg-in .22s ease-out; }
+        @keyframes dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+        .dot { width: 6px; height: 6px; border-radius: 9999px; background: #6b7280; display: inline-block; animation: dot 1.2s infinite; }
+        .dot:nth-child(2) { animation-delay: .15s; }
+        .dot:nth-child(3) { animation-delay: .3s; }
+        .cursor::after { content: '▍'; margin-left: 1px; color: #6b7280; animation: blink 1s steps(2) infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+        .md > :first-child { margin-top: 0; }
+        .md > :last-child { margin-bottom: 0; }
+        .md p { margin: .5em 0; }
+        .md ul { list-style: disc; padding-left: 1.4em; margin: .5em 0; }
+        .md ol { list-style: decimal; padding-left: 1.4em; margin: .5em 0; }
+        .md h1, .md h2, .md h3 { font-weight: 700; margin: .7em 0 .3em; }
+        .md code { background: rgba(0,0,0,.08); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+        .md pre { background: #1f2937; color: #f3f4f6; padding: .75em; border-radius: 8px; overflow-x: auto; margin: .5em 0; }
+        .md pre code { background: none; padding: 0; }
+        .md table { border-collapse: collapse; margin: .5em 0; display: block; overflow-x: auto; }
+        .md th, .md td { border: 1px solid #d1d5db; padding: .25em .6em; }
+        .md a { color: #2563eb; text-decoration: underline; }
+        #messages { scroll-behavior: smooth; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans">
+
+    <nav class="bg-white shadow-md">
+        <div class="container mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="text-xl font-bold text-gray-800">LAMREC</div>
+            <div>
+                <a href="/" class="text-gray-700 hover:text-gray-900 mr-4">Home</a>
+                <a href="/transactions" class="text-gray-700 hover:text-gray-900 mr-4">Transactions</a>
+                <a href="/logout" class="bg-red-600 text-white py-2 px-4 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition duration-150 ease-in-out">
+                    Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+    <div class="container mx-auto p-4 sm:p-6 max-w-4xl">
+        <div class="flex items-end justify-between mb-4">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">Chat</h1>
+                <p class="text-gray-600">Ask questions about your finances and get instant answers.</p>
+            </div>
+            <button id="clear" type="button" class="text-sm text-gray-500 hover:text-red-600 transition">Clear chat</button>
+        </div>
+
+        <div class="bg-white rounded-xl shadow flex flex-col relative" style="height: calc(100vh - 230px); min-height: 420px;">
+            <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-3" aria-live="polite"></div>
+
+            <button id="jump" type="button" class="hidden absolute bottom-24 left-1/2 -translate-x-1/2 bg-white border shadow rounded-full px-3 py-1 text-sm text-gray-600 hover:bg-gray-50">↓ New messages</button>
+
+            <div id="chat-error" class="hidden mx-3 mb-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-md text-sm flex items-center justify-between">
+                <span id="chat-error-text"></span>
+                <button id="retry" type="button" class="ml-3 font-semibold underline">Retry</button>
+            </div>
+
+            <form id="form" class="border-t p-3 flex gap-2 items-end">
+                <textarea id="input" rows="1" maxlength="2000" autocomplete="off" placeholder="Ask about your finances…  (Enter to send, Shift+Enter for new line)" class="flex-1 border rounded-xl px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" style="max-height: 160px;"></textarea>
+                <button id="send" type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition">Send</button>
+                <button id="stop" type="button" class="hidden bg-gray-700 text-white px-4 py-2 rounded-xl hover:bg-gray-800 transition">Stop</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const csrfToken = "{{ csrf_token() }}";
+        const STORE_KEY = 'lamrec-chat';
+        const SUGGESTIONS = [
+            'Summarize my spending this month',
+            'What is my biggest expense category?',
+            'How much have I saved overall?',
+            'Any unusual transactions lately?',
+        ];
+
+        const $ = (id) => document.getElementById(id);
+        const messagesEl = $('messages'), form = $('form'), input = $('input'),
+              sendBtn = $('send'), stopBtn = $('stop'), jumpBtn = $('jump'),
+              errorBox = $('chat-error'), errorText = $('chat-error-text');
+
+        let convo = [];
+        let controller = null;
+        let busy = false;
+
+        try { convo = JSON.parse(sessionStorage.getItem(STORE_KEY) || '[]'); } catch { convo = []; }
+        const save = () => { try { sessionStorage.setItem(STORE_KEY, JSON.stringify(convo)); } catch {} };
+
+        function render(text) {
+            if (!window.marked || !window.DOMPurify) return null;
+            return DOMPurify.sanitize(marked.parse(text, {breaks: true, gfm: true}));
+        }
+
+        function setBubble(bubble, role, text) {
+            if (role === 'user') { bubble.textContent = text; return; }
+            const html = render(text);
+            if (html === null) { bubble.textContent = text; return; }
+            bubble.classList.add('md');
+            bubble.innerHTML = html;
+        }
+
+        const nearBottom = () => messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+        function scrollDown(force) {
+            if (force || nearBottom()) { messagesEl.scrollTop = messagesEl.scrollHeight; jumpBtn.classList.add('hidden'); }
+            else if (busy) jumpBtn.classList.remove('hidden');
+        }
+        messagesEl.addEventListener('scroll', () => { if (nearBottom()) jumpBtn.classList.add('hidden'); });
+        jumpBtn.addEventListener('click', () => scrollDown(true));
+
+        function addMessage(role, text) {
+            const row = document.createElement('div');
+            row.className = 'msg-in flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
+            const bubble = document.createElement('div');
+            bubble.className = 'max-w-[85%] break-words rounded-2xl px-3.5 py-2 ' +
+                (role === 'user' ? 'bg-blue-600 text-white whitespace-pre-wrap rounded-br-sm' : 'bg-gray-100 text-gray-800 rounded-bl-sm');
+            if (text) setBubble(bubble, role, text);
+            row.appendChild(bubble);
+            messagesEl.appendChild(row);
+            scrollDown(true);
+            return bubble;
+        }
+
+        function showSuggestions() {
+            const wrap = document.createElement('div');
+            wrap.id = 'suggestions';
+            wrap.className = 'h-full flex flex-col items-center justify-center text-center gap-4';
+            wrap.innerHTML = '<div class="text-gray-500">How can I help with your finances today?</div>';
+            const chips = document.createElement('div');
+            chips.className = 'flex flex-wrap justify-center gap-2';
+            SUGGESTIONS.forEach((s) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = s;
+                b.className = 'border rounded-full px-3 py-1.5 text-sm text-gray-700 hover:bg-blue-50 hover:border-blue-300 transition';
+                b.addEventListener('click', () => submit(s));
+                chips.appendChild(b);
+            });
+            wrap.appendChild(chips);
+            messagesEl.appendChild(wrap);
+        }
+
+        function setBusy(on) {
+            busy = on;
+            sendBtn.classList.toggle('hidden', on);
+            stopBtn.classList.toggle('hidden', !on);
+            sendBtn.disabled = on;
+            if (!on) input.focus();
+        }
+
+        function showError(msg) { errorText.textContent = msg; errorBox.classList.remove('hidden'); }
+        const hideError = () => errorBox.classList.add('hidden');
+
+        function autosize() {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+        }
+
+        async function requestReply() {
+            hideError();
+            setBusy(true);
+            const bubble = addMessage('assistant', '');
+            bubble.innerHTML = '<span class="dot"></span> <span class="dot"></span> <span class="dot"></span>';
+            controller = new AbortController();
+            let reply = '';
+            let raf = 0;
+            const paint = () => { raf = 0; setBubble(bubble, 'assistant', reply); bubble.classList.add('cursor'); scrollDown(); };
+            try {
+                const res = await fetch('/chat/message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+                    body: JSON.stringify({messages: convo}),
+                    signal: controller.signal,
+                });
+                if (!res.ok) throw new Error('http');
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    reply += decoder.decode(value, {stream: true});
+                    if (!raf) raf = requestAnimationFrame(paint);  // batch DOM updates per frame
+                }
+                if (raf) cancelAnimationFrame(raf);
+                if (!reply) throw new Error('empty');
+                setBubble(bubble, 'assistant', reply);
+                bubble.classList.remove('cursor');
+                convo.push({role: 'assistant', content: reply});
+                save();
+            } catch (err) {
+                if (raf) cancelAnimationFrame(raf);
+                bubble.classList.remove('cursor');
+                if (err.name === 'AbortError' && reply) {
+                    setBubble(bubble, 'assistant', reply);
+                    convo.push({role: 'assistant', content: reply});
+                    save();
+                } else {
+                    bubble.parentElement.remove();
+                    showError('Chat is unavailable right now.');
+                }
+            } finally {
+                controller = null;
+                setBusy(false);
+                scrollDown();
+            }
+        }
+
+        function submit(text) {
+            text = (text || '').trim();
+            if (!text || busy) return;
+            const sug = $('suggestions');
+            if (sug) sug.remove();
+            input.value = '';
+            autosize();
+            convo.push({role: 'user', content: text});
+            save();
+            addMessage('user', text);
+            requestReply();
+        }
+
+        form.addEventListener('submit', (e) => { e.preventDefault(); submit(input.value); });
+        input.addEventListener('input', autosize);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(input.value); }
+        });
+        stopBtn.addEventListener('click', () => controller && controller.abort());
+        $('retry').addEventListener('click', () => { if (!busy && convo.length && convo[convo.length - 1].role === 'user') requestReply(); });
+        $('clear').addEventListener('click', () => {
+            if (controller) controller.abort();
+            convo = []; save(); hideError();
+            messagesEl.innerHTML = '';
+            showSuggestions();
+        });
+
+        // Restore previous conversation, or show suggestions
+        if (convo.length) {
+            convo.forEach((m) => addMessage(m.role, m.content));
+            if (convo[convo.length - 1].role === 'user') showError('The last message did not get a reply.');
+        } else {
+            showSuggestions();
+        }
+        input.focus();
+    </script>
+</body>
+</html>

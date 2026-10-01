@@ -1,12 +1,12 @@
-from flask import Flask, render_template, request, redirect, flash
+from flask import Flask, render_template, request, redirect, flash, jsonify, Response, stream_with_context
+import json
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from datetime import datetime, timedelta
 from hashlib import sha256
 from flask_wtf.csrf import CSRFProtect
 import uuid
-
-# os environment variables
+import requests
 import os
 
 
@@ -192,6 +192,74 @@ def delete(id):
     db.session.delete(transaction_to_delete)
     db.session.commit()
     return redirect('/transactions')
+
+
+@app.get('/chat')
+def chat():
+    if not current_user.is_authenticated:
+        return redirect('/login')
+    return render_template('chat.html')
+
+
+@app.post('/chat/message')
+def chat_message():
+    if not current_user.is_authenticated:
+        return jsonify(error='Unauthorized'), 401
+    api_key = os.environ.get('OPENROUTER_API_KEY')
+    if not api_key:
+        return jsonify(error='Chat is not configured'), 503
+    model = os.environ.get('OPENROUTER_MODEL', 'space-bunny-alpha')
+
+    data = request.get_json(silent=True) or {}
+    history = [
+        {'role': m['role'], 'content': m['content'][:2000]}
+        for m in data.get('messages', [])
+        if isinstance(m, dict) and m.get('role') in ('user', 'assistant') and isinstance(m.get('content'), str)
+    ][-20:]
+    if not history or history[-1]['role'] != 'user':
+        return jsonify(error='Invalid request'), 400
+
+    recent = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.date.desc()).limit(50).all()
+    lines = "\n".join(f'{t.date:%Y-%m-%d} {t.category} {t.amount:.2f} {t.description}' for t in recent)
+    system = (
+        "You are a helpful assistant inside LAMREC, a personal income/expense tracker. "
+        "Answer questions about the user's finances concisely. Their 50 most recent transactions. Also give them advice on how can they lower their expenses."
+        f"(newest first):\n{lines or '(none)'}"
+    )
+    response = requests.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+        json={'model': model, 'stream': True, 'messages': [{'role': 'system', 'content': system}] + history},
+        timeout=60,
+        stream=True,
+    )
+    if not response.ok:
+        app.logger.error('OpenRouter %s: %s', response.status_code, response.text)
+        return jsonify(error='Chat service error'), 502
+
+    response.encoding = 'utf-8'
+
+    def generate():
+        try:
+            for line in response.iter_lines(decode_unicode=True):
+                # SSE lines look like "data: {...}"; ignore comments/keep-alives
+                if not line or not line.startswith('data:'):
+                    continue
+                payload = line[5:].strip()
+                if payload == '[DONE]':
+                    break
+                try:
+                    choices = json.loads(payload).get('choices') or []
+                except ValueError:
+                    continue
+                delta = choices[0].get('delta', {}).get('content') if choices else None
+                if delta:
+                    yield delta
+        finally:
+            response.close()
+
+    return Response(stream_with_context(generate()), mimetype='text/plain',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
 @app.route('/logout')
