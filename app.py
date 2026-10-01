@@ -201,6 +201,100 @@ def chat():
     return render_template('chat.html')
 
 
+CHAT_TOOLS = [
+    {
+        'type': 'function',
+        'function': {
+            'name': 'add_transaction',
+            'description': 'Add a new income or expense transaction for the user.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'category': {'type': 'string', 'enum': ['income', 'expense']},
+                    'amount': {'type': 'number', 'description': 'Positive amount'},
+                    'description': {'type': 'string', 'description': 'Short description (max 150 chars)'},
+                    'date': {'type': 'string', 'description': 'YYYY-MM-DD, not in the future. Defaults to today.'},
+                },
+                'required': ['category', 'amount', 'description'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'get_transactions',
+            'description': "Fetch the user's transactions for a given date, or for an inclusive date range.",
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'date': {'type': 'string', 'description': 'YYYY-MM-DD, a single day'},
+                    'start_date': {'type': 'string', 'description': 'YYYY-MM-DD, range start'},
+                    'end_date': {'type': 'string', 'description': 'YYYY-MM-DD, range end'},
+                },
+            },
+        },
+    },
+]
+
+
+def _parse_day(value):
+    return datetime.strptime(str(value).strip(), '%Y-%m-%d')
+
+
+def run_chat_tool(name, args, user_id):
+    if not isinstance(args, dict):
+        return {'error': 'Invalid arguments'}
+    try:
+        if name == 'add_transaction':
+            category = args.get('category')
+            if category not in ('income', 'expense'):
+                return {'error': 'category must be "income" or "expense"'}
+            try:
+                amount = float(args.get('amount'))
+            except (TypeError, ValueError):
+                return {'error': 'Invalid amount'}
+            if not 0 < amount < float('inf'):
+                return {'error': 'Amount must be greater than 0'}
+            description = str(args.get('description') or '').strip()
+            if not description or len(description) > 150:
+                return {'error': 'Description must be 1-150 characters'}
+            if args.get('date'):
+                date = _parse_day(args['date'])
+            else:
+                date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            if date > datetime.now():
+                return {'error': 'Date cannot be in the future'}
+            transaction = Transaction(id=str(uuid.uuid4()), category=category, date=date, amount=amount,
+                                      description=description, user_id=user_id)
+            db.session.add(transaction)
+            db.session.commit()
+            return {'ok': True, 'transaction': {'date': f'{date:%Y-%m-%d}', 'category': category,
+                                                'amount': round(amount, 2), 'description': description}}
+
+        if name == 'get_transactions':
+            if args.get('date'):
+                start = end = _parse_day(args['date'])
+            elif args.get('start_date') and args.get('end_date'):
+                start, end = _parse_day(args['start_date']), _parse_day(args['end_date'])
+            else:
+                return {'error': 'Provide date, or both start_date and end_date'}
+            if end < start:
+                return {'error': 'end_date is before start_date'}
+            rows = (Transaction.query.filter_by(user_id=user_id)
+                    .filter(Transaction.date >= start, Transaction.date < end + timedelta(days=1))
+                    .order_by(Transaction.date.asc()).limit(200).all())
+            return {'count': len(rows), 'transactions': [
+                {'date': f'{t.date:%Y-%m-%d}', 'category': t.category, 'amount': round(t.amount, 2),
+                 'description': t.description} for t in rows]}
+    except ValueError:
+        return {'error': 'Invalid date, use YYYY-MM-DD'}
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Chat tool %s failed', name)
+        return {'error': 'Tool failed'}
+    return {'error': f'Unknown tool {name}'}
+
+
 @app.post('/chat/message')
 def chat_message():
     if not current_user.is_authenticated:
@@ -223,40 +317,80 @@ def chat_message():
     lines = "\n".join(f'{t.date:%Y-%m-%d} {t.category} {t.amount:.2f} {t.description}' for t in recent)
     system = (
         "You are a helpful assistant inside LAMREC, a personal income/expense tracker. "
-        "Answer questions about the user's finances concisely. Their 50 most recent transactions. Also give them advice on how can they lower their expenses."
+        "Answer questions about the user's finances concisely. Their 50 most recent transactions. Also give them advice on how can they lower their expenses. "
+        f"Today's date is {datetime.now():%Y-%m-%d}. "
+        "You can add transactions with the add_transaction tool and look up transactions for any date or range "
+        "with get_transactions; use them when asked instead of guessing, and resolve relative dates like "
+        "'yesterday' to YYYY-MM-DD. If the category, amount or description of a new transaction is unclear, "
+        "ask first. Confirm what you added afterwards. "
         f"(newest first):\n{lines or '(none)'}"
     )
-    response = requests.post(
-        'https://openrouter.ai/api/v1/chat/completions',
-        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
-        json={'model': model, 'stream': True, 'messages': [{'role': 'system', 'content': system}] + history},
-        timeout=60,
-        stream=True,
-    )
-    if not response.ok:
-        app.logger.error('OpenRouter %s: %s', response.status_code, response.text)
+    user_id = current_user.id
+    messages = [{'role': 'system', 'content': system}] + history
+
+    def open_stream():
+        return requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+            json={'model': model, 'stream': True, 'messages': messages, 'tools': CHAT_TOOLS},
+            timeout=60,
+            stream=True,
+        )
+
+    first = open_stream()
+    if not first.ok:
+        app.logger.error('OpenRouter %s: %s', first.status_code, first.text)
         return jsonify(error='Chat service error'), 502
 
-    response.encoding = 'utf-8'
-
     def generate():
-        try:
-            for line in response.iter_lines(decode_unicode=True):
-                # SSE lines look like "data: {...}"; ignore comments/keep-alives
-                if not line or not line.startswith('data:'):
-                    continue
-                payload = line[5:].strip()
-                if payload == '[DONE]':
-                    break
+        response = first
+        for _ in range(5):
+            response.encoding = 'utf-8'
+            content = ''
+            calls = {}
+            try:
+                for line in response.iter_lines(decode_unicode=True):
+                    # SSE lines look like "data: {...}"; ignore comments/keep-alives
+                    if not line or not line.startswith('data:'):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == '[DONE]':
+                        break
+                    try:
+                        choices = json.loads(payload).get('choices') or []
+                    except ValueError:
+                        continue
+                    delta = (choices[0].get('delta') or {}) if choices else {}
+                    if delta.get('content'):
+                        content += delta['content']
+                        yield delta['content']
+                    for tc in delta.get('tool_calls') or []:
+                        call = calls.setdefault(tc.get('index', 0), {'id': '', 'name': '', 'arguments': ''})
+                        call['id'] = tc.get('id') or call['id']
+                        fn = tc.get('function') or {}
+                        call['name'] += fn.get('name') or ''
+                        call['arguments'] += fn.get('arguments') or ''
+            finally:
+                response.close()
+            if not calls:
+                return
+            ordered = [calls[i] for i in sorted(calls)]
+            messages.append({
+                'role': 'assistant', 'content': content or None,
+                'tool_calls': [{'id': c['id'], 'type': 'function',
+                                'function': {'name': c['name'], 'arguments': c['arguments']}} for c in ordered],
+            })
+            for c in ordered:
                 try:
-                    choices = json.loads(payload).get('choices') or []
+                    args = json.loads(c['arguments'] or '{}')
                 except ValueError:
-                    continue
-                delta = choices[0].get('delta', {}).get('content') if choices else None
-                if delta:
-                    yield delta
-        finally:
-            response.close()
+                    args = None
+                messages.append({'role': 'tool', 'tool_call_id': c['id'],
+                                 'content': json.dumps(run_chat_tool(c['name'], args, user_id))})
+            response = open_stream()
+            if not response.ok:
+                app.logger.error('OpenRouter %s: %s', response.status_code, response.text)
+                return
 
     return Response(stream_with_context(generate()), mimetype='text/plain',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
