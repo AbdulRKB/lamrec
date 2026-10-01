@@ -1,10 +1,12 @@
 ## 📋 lamrec  
 Your simple and fast record-keeping tool.
 
-## 🚀 Installation & Usage
+## 🚀 Usage
 ```bash
 $ git clone https://github.com/AbdulRKB/lamrec.git
 $ cd lamrec
+$ export OPENROUTER_API_KEY="YOUR_API_KEY" 
+$ export OPENROUTER_MODEL="YOUR_MODEL"
 $ pip install -r requirements.txt
 $ python app.py
 ```
