@@ -168,7 +168,7 @@
             hideError();
             setBusy(true);
             const bubble = addMessage('assistant', '');
-            bubble.innerHTML = '<span class="dot"></span> <span class="dot"></span> <span class="dot"></span>';
+            bubble.innerHTML = '<span class="text-gray-500 mr-1.5">Thinking</span><span class="dot"></span> <span class="dot"></span> <span class="dot"></span>';
             controller = new AbortController();
             let reply = '';
             let raf = 0;
