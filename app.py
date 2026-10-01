@@ -316,7 +316,7 @@ def chat_message():
     recent = Transaction.query.filter_by(user_id=current_user.id).order_by(Transaction.date.desc()).limit(50).all()
     lines = "\n".join(f'{t.date:%Y-%m-%d} {t.category} {t.amount:.2f} {t.description}' for t in recent)
     system = (
-        "You are a helpful assistant inside LAMREC, a personal income/expense tracker. "
+        "You are a helpful assistant inside LAMREC, a personal income/expense tracker. AIM FOR concise msgs (don't waste tokens on a basic question)"
         "Answer questions about the user's finances concisely. Their 50 most recent transactions. Also give them advice on how can they lower their expenses. "
         f"Today's date is {datetime.now():%Y-%m-%d}. "
         "You can add transactions with the add_transaction tool and look up transactions for any date or range "
